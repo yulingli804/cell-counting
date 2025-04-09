@@ -209,11 +209,36 @@ def analyze_image(path, signal_name='RFP', exposure_time=1.0):
     results = extract_regions(masks, image_proc)
 
     # Normalize by exposure time
+    # Normalize by exposure time for automatic detection results
     for r in results:
         r['norm_intensity'] = r['mean_intensity'] / exposure_time
-
-    visualize_results(image_orig, results, title=f"{signal_name} | {len(results)} cells")
-    return results
+    
+    # Create overlay image using CH2 and CH3 channels
+    ch2_img = image_orig
+    ch3_path = path.replace("CH2", "CH3")
+    if os.path.exists(ch3_path):
+        ch3_img = io.imread(ch3_path)
+        if ch3_img.ndim == 3:
+            ch3_img = ch3_img[:, :, 0]
+    else:
+        ch3_img = np.zeros_like(ch2_img)
+    
+    # Normalize images to [0, 1]
+    ch2_norm = (ch2_img.astype(np.float32) - ch2_img.min()) / (ch2_img.max() - ch2_img.min())
+    ch3_norm = (ch3_img.astype(np.float32) - ch3_img.min()) / ((ch3_img.max() - ch3_img.min()) + 1e-8)
+    overlay_img = np.stack([ch2_norm, np.zeros_like(ch2_norm), ch3_norm], axis=-1)
+    
+    # Interactive manual correction of cell points
+    final_results = interactive_correction(overlay_img, results)
+    
+    # Display the final overlay with updated cell count
+    plt.figure(figsize=(10,10))
+    plt.imshow(overlay_img)
+    plt.title(f"{signal_name} | {len(final_results)} cells")
+    plt.axis('off')
+    plt.show()
+    
+    return final_results
 
 
 if __name__ == '__main__':
