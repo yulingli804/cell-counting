@@ -9,6 +9,7 @@ from tkinter import filedialog
 import glob
 import re
 from matplotlib.widgets import Slider
+import matplotlib
 
 
 
@@ -59,7 +60,7 @@ def preprocess_image(path, low_in=2, high_in=180, low_out=90, high_out=140, gamm
 
     return image_gamma, image
 
-def run_cellpose(image, diameter=30, gpu=True):
+def run_cellpose(image, diameter=40, gpu=True):
     model = models.Cellpose(model_type='cyto2', gpu=gpu)
     masks, _, _, _ = model.eval(image, diameter=diameter, flow_threshold=1.0, cellprob_threshold=0.0)
     return masks
@@ -96,13 +97,32 @@ def visualize_results(original_img, results, title=''):
 def interactive_correction(overlay_img, cell_results):
     import matplotlib.pyplot as plt
     from matplotlib.widgets import Button
+    import numpy as np
     
+
     fig, ax = plt.subplots(figsize=(10, 10))
+
+    
+# Try forcing the window to the front (TkAgg example)
+    try:
+        fig.canvas.manager.window.attributes("-topmost", True)
+        fig.canvas.manager.window.attributes("-topmost", False)
+    except Exception as e:
+        print("Could not raise the window:", e)
+    
+    # Attempt to bring the figure window to the front
+    try:
+        # For TkAgg backend
+        fig.canvas.manager.window.attributes("-topmost", True)
+        fig.canvas.manager.window.attributes("-topmost", False)
+    except Exception as e:
+        print("Window raising not supported for this backend:", e)
+    
     plt.subplots_adjust(bottom=0.3)
     ax.imshow(overlay_img)
     
     if cell_results:
-        pts = np.array([r['centroid'][::-1] for r in cell_results])  # (x, y) from (row, col)
+        pts = np.array([r['centroid'][::-1] for r in cell_results])  # Convert (row, col) to (x, y)
         ax.scatter(pts[:, 0], pts[:, 1], s=30, c='lime', marker='o', label='Detected Cells')
     else:
         pts = np.empty((0, 2))
@@ -112,6 +132,13 @@ def interactive_correction(overlay_img, cell_results):
     poly_line = None
     
     ax.set_title("Delete points: Click on points to mark for deletion, then click 'Finish Deleting Points'")
+    
+    # Create buttons for deletion and addition
+    ax_del = plt.axes([0.7, 0.1, 0.25, 0.075])
+    btn_del = Button(ax_del, "Finish Deleting Points")
+    ax_add = plt.axes([0.7, 0.2, 0.25, 0.075])
+    btn_add = Button(ax_add, "Finish Adding Points")
+    ax_add.set_visible(False)
     
     # Create buttons for deletion and addition
     ax_del = plt.axes([0.7, 0.1, 0.25, 0.075])
@@ -215,18 +242,45 @@ def analyze_image(path, signal_name='RFP', exposure_time=1.0):
     
     # Create overlay image using CH2 and CH3 channels
     ch2_img = image_orig
+    from skimage import io, img_as_float32
+
     ch3_path = path.replace("CH2", "CH3")
     if os.path.exists(ch3_path):
         ch3_img = io.imread(ch3_path)
+
+        # If the image has 3 channels, grab just one
         if ch3_img.ndim == 3:
             ch3_img = ch3_img[:, :, 0]
+
+        print("CH3 original dtype:", ch3_img.dtype)
+
+        # Proper float conversion
+        ch3_img = img_as_float32(ch3_img)
+        print("CH3 converted min/max:", ch3_img.min(), ch3_img.max())
+
+        
+
+
+        # Scale up to boost visibility if needed
+        ch3_norm = np.clip(ch3_img * 3.0, 0, 1)
+
+        plt.figure(figsize=(8, 6))
+        plt.imshow(ch3_norm, cmap='Blues')
+        plt.title("CH3 Normalized (DAPI)")
+        plt.colorbar()
+        plt.axis('off')
+        plt.show()
+
     else:
-        ch3_img = np.zeros_like(ch2_img)
+        print("WARNING: CH3 image not found. Using empty fallback.")
+        ch3_norm = np.zeros(ch2_img.shape[:2], dtype=np.float32)
     
     # Normalize images to [0, 1]
-    ch2_norm = (ch2_img.astype(np.float32) - ch2_img.min()) / (ch2_img.max() - ch2_img.min())
-    ch3_norm = (ch3_img.astype(np.float32) - ch3_img.min()) / ((ch3_img.max() - ch3_img.min()) + 1e-8)
+    ch2_gray = cv2.cvtColor(ch2_img, cv2.COLOR_RGB2GRAY)
+    ch2_norm = (ch2_gray.astype(np.float32) - ch2_gray.min()) / (ch2_gray.max() - ch2_gray.min())
+
     overlay_img = np.stack([ch2_norm, np.zeros_like(ch2_norm), ch3_norm], axis=-1)
+    
     
     # Interactive manual correction of cell points
     final_results = interactive_correction(overlay_img, results)
@@ -242,6 +296,7 @@ def analyze_image(path, signal_name='RFP', exposure_time=1.0):
 
 
 if __name__ == '__main__':
+    print("Current backend:", matplotlib.get_backend())
     folder = select_folder()
 
     print("All .tif files:")
